@@ -1,3 +1,5 @@
+# Prod Environment Variables Configuration
+
 resource_groups = {
   rg_prod_app = {
     name     = "rg-prod-app-eastus-001"
@@ -6,6 +8,7 @@ resource_groups = {
       Environment = "Prod"
       Owner       = "AppTeam"
       ManagedBy   = "Terraform"
+      CostCenter  = "CC-101-PROD"
     }
   }
   rg_prod_data = {
@@ -15,6 +18,7 @@ resource_groups = {
       Environment = "Prod"
       Owner       = "DataTeam"
       ManagedBy   = "Terraform"
+      CostCenter  = "CC-102-PROD"
     }
   }
 }
@@ -30,6 +34,7 @@ storage_accounts = {
       Environment = "Prod"
       Component   = "AppStorage"
       ManagedBy   = "Terraform"
+      CostCenter  = "CC-101-PROD"
     }
   }
   stproddata001 = {
@@ -42,6 +47,7 @@ storage_accounts = {
       Environment = "Prod"
       Component   = "DataStorage"
       ManagedBy   = "Terraform"
+      CostCenter  = "CC-102-PROD"
     }
   }
 }

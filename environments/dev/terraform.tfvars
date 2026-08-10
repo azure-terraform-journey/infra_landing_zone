@@ -1,3 +1,5 @@
+# Dev Environment Variables Configuration
+
 resource_groups = {
   rg_dev_app = {
     name     = "rg-dev-app-eastus-001"
@@ -6,6 +8,7 @@ resource_groups = {
       Environment = "Dev"
       Owner       = "AppTeam"
       ManagedBy   = "Terraform"
+      CostCenter  = "CC-101-DEV"
     }
   }
   rg_dev_data = {
@@ -15,6 +18,7 @@ resource_groups = {
       Environment = "Dev"
       Owner       = "DataTeam"
       ManagedBy   = "Terraform"
+      CostCenter  = "CC-102-DEV"
     }
   }
 }
@@ -30,6 +34,7 @@ storage_accounts = {
       Environment = "Dev"
       Component   = "AppStorage"
       ManagedBy   = "Terraform"
+      CostCenter  = "CC-101-DEV"
     }
   }
   stdevdata001 = {
@@ -42,6 +47,7 @@ storage_accounts = {
       Environment = "Dev"
       Component   = "DataStorage"
       ManagedBy   = "Terraform"
+      CostCenter  = "CC-102-DEV"
     }
   }
 }
