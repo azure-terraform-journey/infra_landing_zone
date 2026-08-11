@@ -13,103 +13,267 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
 
-  # ==========================================
-  # PR - Terraform Plan
-  # ==========================================
+  # ============================================================
+  # STAGE 1 - SECURITY SCAN
+  # ============================================================
+
+  security-scan:
+
+    name: Security Scan
+    runs-on: self-hosted
+
+    steps:
+
+      # ----------------------------------------------------------
+      # Checkout
+      # ----------------------------------------------------------
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+      # ==========================================================
+      # SCAN 1 - TRIVY
+      # ==========================================================
+
+      - name: Trivy IaC Scan
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          scanners: misconfig,secret
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+
+      # ==========================================================
+      # SCAN 2 - CHECKOV
+      # ==========================================================
+
+      - name: Checkov Terraform Scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          soft_fail: false
+
+
+      # ==========================================================
+      # SCAN 3 - GITLEAKS
+      # ==========================================================
+
+      - name: Gitleaks Secret Scan
+        uses: gitleaks/gitleaks-action@v3
+
+
+  # ============================================================
+  # STAGE 2 - TERRAFORM PLAN
+  # ============================================================
 
   terraform-plan:
 
-    name: Terraform Plan - PR
+    name: Terraform Plan
 
-    if: github.event_name == 'pull_request'
+    needs:
+      - security-scan
+
+    if: >
+      needs.security-scan.result == 'success' &&
+      (
+        github.event_name == 'pull_request' ||
+        (
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main'
+        )
+      )
 
     runs-on: self-hosted
 
     steps:
 
+      # ----------------------------------------------------------
+      # Checkout
+      # ----------------------------------------------------------
+
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # PR OIDC Login
-      - name: Azure Login - PR OIDC
+
+      # ==========================================================
+      # AZURE OIDC LOGIN
+      # Same credentials for PR and Main
+      # ==========================================================
+
+      - name: Azure Login - OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+
+      # ----------------------------------------------------------
+      # Verify Azure Login
+      # ----------------------------------------------------------
+
       - name: Verify Azure Login
         run: az account show
 
-      # Terraform
+
+      # ----------------------------------------------------------
+      # Setup Terraform
+      # ----------------------------------------------------------
+
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
+
+
+      # ----------------------------------------------------------
+      # Terraform Format
+      # ----------------------------------------------------------
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
 
+
+      # ----------------------------------------------------------
+      # Terraform Init
+      # ----------------------------------------------------------
+
       - name: Terraform Init
         working-directory: environments/dev
-        run: terraform init
+        run: terraform init -input=false
+
+
+      # ----------------------------------------------------------
+      # Terraform Validate
+      # ----------------------------------------------------------
 
       - name: Terraform Validate
         working-directory: environments/dev
         run: terraform validate
 
+
+      # ----------------------------------------------------------
+      # Terraform Plan
+      # ----------------------------------------------------------
+
       - name: Terraform Plan
         working-directory: environments/dev
-        run: terraform plan
+        run: terraform plan -input=false -out=tfplan
 
 
-  # ==========================================
-  # MAIN - Terraform Plan + Apply
-  # ==========================================
+      # ----------------------------------------------------------
+      # Upload Plan for Main Apply
+      # Only Main push
+      # ----------------------------------------------------------
+
+      - name: Upload Terraform Plan
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: environments/dev/tfplan
+          retention-days: 1
+
+
+  # ============================================================
+  # STAGE 3 - MANUAL APPROVAL + APPLY
+  # ============================================================
 
   terraform-apply:
 
-    name: Terraform Apply - Main
+    name: Manual Approval - Terraform Apply
 
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - terraform-plan
+
+    if: >
+      needs.terraform-plan.result == 'success' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
 
     runs-on: self-hosted
 
+    # ----------------------------------------------------------
+    # IMPORTANT:
+    # GitHub Environment must have Required Reviewers enabled
+    # ----------------------------------------------------------
+
+    environment:
+      name: production
+
     steps:
+
+      # ----------------------------------------------------------
+      # Checkout
+      # ----------------------------------------------------------
 
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # MAIN OIDC Login
-      - name: Azure Login - Main OIDC
+
+      # ----------------------------------------------------------
+      # Azure OIDC Login
+      # Same credentials
+      # ----------------------------------------------------------
+
+      - name: Azure Login - OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+
+      # ----------------------------------------------------------
+      # Verify Azure Login
+      # ----------------------------------------------------------
+
       - name: Verify Azure Login
         run: az account show
 
-      # Terraform
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive
+      # ----------------------------------------------------------
+      # Setup Terraform
+      # ----------------------------------------------------------
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+
+      # ----------------------------------------------------------
+      # Terraform Init
+      # ----------------------------------------------------------
 
       - name: Terraform Init
         working-directory: environments/dev
-        run: terraform init
+        run: terraform init -input=false
 
-      - name: Terraform Validate
-        working-directory: environments/dev
-        run: terraform validate
 
-      - name: Terraform Plan
-        working-directory: environments/dev
-        run: terraform plan -out=tfplan
+      # ----------------------------------------------------------
+      # Download Terraform Plan
+      # ----------------------------------------------------------
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: environments/dev
+
+
+      # ----------------------------------------------------------
+      # Terraform Apply
+      # ----------------------------------------------------------
 
       - name: Terraform Apply
         working-directory: environments/dev
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -input=false -auto-approve tfplan
