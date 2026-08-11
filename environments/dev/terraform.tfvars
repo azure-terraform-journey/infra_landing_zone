@@ -21,6 +21,16 @@ resource_groups = {
       CostCenter  = "CC-102-DEV"
     }
   }
+  rg_dev_app2 = {
+    name     = "rg-dev-app2-eastus-002"
+    location = "eastus"
+    tags = {
+      Environment = "Dev2"
+      Owner       = "AppTeam"
+      ManagedBy   = "Terraform"
+      CostCenter  = "CC-101-DEV"
+}
+  }
 }
 
 storage_accounts = {
