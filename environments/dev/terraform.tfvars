@@ -31,6 +31,7 @@ resource_groups = {
       CostCenter  = "CC-101-DEV"
 }
   }
+}
 
 storage_accounts = {
   stdevapp001 = {
