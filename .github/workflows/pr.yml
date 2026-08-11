@@ -141,17 +141,19 @@ jobs:
 
           Write-Host "Installing Checkov..."
 
+          python -m pip install --upgrade pip
+
           python -m pip install `
-            --upgrade `
-            --target $checkovDir `
+            --target "$checkovDir" `
             checkov
 
-          # Add Python package directory
-          Add-Content `
-            -Path $env:GITHUB_PATH `
-            -Value $checkovDir
-
           Write-Host "Checkov installation completed."
+
+          Write-Host "Checking Checkov files..."
+
+          Get-ChildItem "$checkovDir\Scripts" -ErrorAction SilentlyContinue
+
+          Get-ChildItem "$checkovDir" -Filter "checkov*" -Recurse
 
 
       # ========================================================
@@ -266,11 +268,25 @@ jobs:
           Write-Host "CHECKOV TERRAFORM SCAN"
           Write-Host "=============================="
 
-          python -m checkov `
+          $checkovDir = "$env:RUNNER_TEMP\checkov"
+
+          $checkovExe = Get-ChildItem `
+            -Path $checkovDir `
+            -Filter "checkov.exe" `
+            -Recurse |
+            Select-Object -First 1
+
+          if (-not $checkovExe) {
+              throw "Checkov executable not found."
+          }
+
+          Write-Host "Checkov executable:"
+          Write-Host $checkovExe.FullName
+
+          & $checkovExe.FullName `
             -d . `
             --framework terraform `
             --compact
-
 
       # ========================================================
       # GITLEAKS SCAN
