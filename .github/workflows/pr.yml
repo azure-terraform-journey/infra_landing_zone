@@ -1,0 +1,346 @@
+name: Terraform Azure Infrastructure
+
+on:
+  pull_request:
+    branches:
+      - main
+
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_WORKING_DIR: environments/dev
+
+jobs:
+
+  # ============================================================
+  # STAGE 1 - SECURITY SCAN
+  # ============================================================
+
+  security-scan:
+    name: Security Scan
+
+    runs-on: self-hosted
+
+    steps:
+
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      # --------------------------------------------------------
+      # Setup Python 3.12
+      # IMPORTANT:
+      # Checkov does not support Python 3.14
+      # --------------------------------------------------------
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify Python
+        shell: powershell
+        run: |
+          python --version
+          python -m pip --version
+
+      # --------------------------------------------------------
+      # Install Checkov
+      # --------------------------------------------------------
+
+      - name: Install Checkov
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install checkov
+
+      - name: Verify Checkov
+        shell: powershell
+        run: |
+          checkov --version
+
+      # --------------------------------------------------------
+      # Trivy IaC Scan
+      # --------------------------------------------------------
+
+      - name: Trivy IaC Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+
+      # --------------------------------------------------------
+      # Checkov Terraform Scan
+      # --------------------------------------------------------
+
+      - name: Checkov Terraform Scan
+        shell: powershell
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          checkov `
+            --directory . `
+            --framework terraform `
+            --quiet
+
+      # --------------------------------------------------------
+      # Gitleaks Secret Scan
+      # --------------------------------------------------------
+
+      - name: Gitleaks Secret Scan
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================
+  # STAGE 2 - TERRAFORM PLAN
+  # Runs for PR AND main push
+  # ============================================================
+
+  terraform-plan:
+    name: Terraform Plan
+
+    needs: security-scan
+
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
+    runs-on: self-hosted
+
+    steps:
+
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      # --------------------------------------------------------
+      # Azure OIDC Login
+      #
+      # You told me your PR and Main secrets have the
+      # SAME secret names, so I am keeping these names.
+      # --------------------------------------------------------
+
+      - name: Azure Login - OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # --------------------------------------------------------
+      # Verify Azure
+      # --------------------------------------------------------
+
+      - name: Verify Azure Login
+        shell: powershell
+        run: |
+          az account show
+
+      # --------------------------------------------------------
+      # Setup Terraform
+      # --------------------------------------------------------
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Verify Terraform
+        shell: powershell
+        run: |
+          terraform version
+
+      # --------------------------------------------------------
+      # Terraform Format
+      # --------------------------------------------------------
+
+      - name: Terraform Format Check
+        shell: powershell
+        run: |
+          terraform fmt -check -recursive
+
+      # --------------------------------------------------------
+      # Terraform Init
+      # --------------------------------------------------------
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: powershell
+        run: |
+          terraform init
+
+      # --------------------------------------------------------
+      # Terraform Validate
+      # --------------------------------------------------------
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: powershell
+        run: |
+          terraform validate
+
+      # --------------------------------------------------------
+      # Terraform Plan
+      # --------------------------------------------------------
+
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: powershell
+        run: |
+          terraform plan -out=tfplan
+
+      # --------------------------------------------------------
+      # Upload Plan
+      # So Apply job can download it
+      # --------------------------------------------------------
+
+      - name: Upload Terraform Plan
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: ${{ env.TF_WORKING_DIR }}/tfplan
+
+
+  # ============================================================
+  # STAGE 3 - MANUAL APPROVAL
+  # ONLY MAIN
+  # ============================================================
+
+  manual-approval:
+    name: Manual Approval - Terraform Apply
+
+    needs: terraform-plan
+
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+
+    runs-on: self-hosted
+
+    environment:
+      name: terraform-production
+
+    steps:
+
+      - name: Approval Granted
+        shell: powershell
+        run: |
+          Write-Host "Manual approval received."
+          Write-Host "Terraform Apply can proceed."
+
+
+  # ============================================================
+  # STAGE 4 - TERRAFORM APPLY
+  # ONLY MAIN
+  # ============================================================
+
+  terraform-apply:
+    name: Terraform Apply - Main
+
+    needs:
+      - terraform-plan
+      - manual-approval
+
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+
+    runs-on: self-hosted
+
+    environment:
+      name: terraform-production
+
+    steps:
+
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      # --------------------------------------------------------
+      # Azure Main OIDC Login
+      # --------------------------------------------------------
+
+      - name: Azure Login - Main OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # --------------------------------------------------------
+      # Verify Azure
+      # --------------------------------------------------------
+
+      - name: Verify Azure Login
+        shell: powershell
+        run: |
+          az account show
+
+      # --------------------------------------------------------
+      # Setup Terraform
+      # --------------------------------------------------------
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Verify Terraform
+        shell: powershell
+        run: |
+          terraform version
+
+      # --------------------------------------------------------
+      # Download Terraform Plan
+      # --------------------------------------------------------
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: ${{ env.TF_WORKING_DIR }}
+
+      # --------------------------------------------------------
+      # Terraform Init
+      # --------------------------------------------------------
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: powershell
+        run: |
+          terraform init
+
+      # --------------------------------------------------------
+      # Terraform Apply
+      # --------------------------------------------------------
+
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: powershell
+        run: |
+          terraform apply -auto-approve tfplan
+
+      # --------------------------------------------------------
+      # Verify
+      # --------------------------------------------------------
+
+      - name: Verify Terraform State
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        shell: powershell
+        run: |
+          terraform show
