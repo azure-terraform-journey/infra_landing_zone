@@ -15,14 +15,15 @@ permissions:
 
 jobs:
 
-  # ==============================
+  # ==========================================
   # PR - Terraform Plan
-  # ==============================
+  # ==========================================
+
   terraform-plan:
 
-    if: github.event_name == 'pull_request'
-
     name: Terraform Plan - PR
+
+    if: github.event_name == 'pull_request'
 
     runs-on: self-hosted
 
@@ -31,18 +32,22 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Azure Login - PR Credentials
+      # PR OIDC Login
+      - name: Azure Login - PR OIDC
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_PR_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_PR_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_PR_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_PR_SUBSCRIPTION_ID }}
 
       - name: Verify Azure Login
         run: az account show
 
+      # Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Format
+      - name: Terraform Format Check
         run: terraform fmt -check -recursive
 
       - name: Terraform Init
@@ -58,14 +63,15 @@ jobs:
         run: terraform plan
 
 
-  # ==============================
-  # MAIN - Terraform Apply
-  # ==============================
+  # ==========================================
+  # MAIN - Terraform Plan + Apply
+  # ==========================================
+
   terraform-apply:
 
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
     name: Terraform Apply - Main
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     runs-on: self-hosted
 
@@ -74,7 +80,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Azure Login - OIDC
+      # MAIN OIDC Login
+      - name: Azure Login - Main OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -84,10 +91,11 @@ jobs:
       - name: Verify Azure Login
         run: az account show
 
+      # Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Format
+      - name: Terraform Format Check
         run: terraform fmt -check -recursive
 
       - name: Terraform Init
@@ -100,8 +108,8 @@ jobs:
 
       - name: Terraform Plan
         working-directory: environments/dev
-        run: terraform plan
+        run: terraform plan -out=tfplan
 
       - name: Terraform Apply
         working-directory: environments/dev
-        run: terraform apply -auto-approve
+        run: terraform apply -auto-approve tfplan
