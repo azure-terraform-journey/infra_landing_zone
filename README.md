@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🌐 Azure Infrastructure Landing Zone 🚀
 
 [![Terraform](https://img.shields.io/badge/Terraform-%3E%3D%201.3.0-623CE4?style=for-the-badge&logo=terraform&logoColor=white)](https://www.terraform.io/)
@@ -252,3 +253,31 @@ All resources strictly apply metadata tags to ensure enterprise compliance and s
 <p align="center">
   <i>Made with ❤️ for Cloud Engineers & DevOps Teams</i>
 </p>
+=======
+# infra_landing_zone
+# # 🚀 Azure Infrastructure Landing Zone
+
+Terraform-based Azure Infrastructure Landing Zone designed to deploy secure, scalable, and reusable cloud infrastructure using Infrastructure as Code (IaC).
+
+## 🛠️ Technologies
+
+- Azure
+- Terraform
+- Git & GitHub
+- Docker
+- Kubernetes
+
+## 📂 Project Structure
+
+```text
+infra_landing_zone/
+├── environments/
+│   └── dev/
+├── modules/
+│   ├── resource-group/
+│   ├── networking/
+│   ├── security/
+│   └── compute/
+├── .gitignore
+└── README.md
+>>>>>>> 3bd40eba92ab83078d38bb5637c25742f99fe7ac
