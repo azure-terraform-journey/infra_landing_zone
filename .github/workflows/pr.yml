@@ -17,22 +17,24 @@ concurrency:
   group: terraform-${{ github.ref }}
   cancel-in-progress: false
 
-jobs:
 
-  # ============================================================
-  # STAGE 1 - SECURITY SCAN
-  # ============================================================
+# ============================================================
+# STAGE 1 - SECURITY SCAN
+# ============================================================
+
+jobs:
 
   security-scan:
 
     name: Security Scan
+
     runs-on: self-hosted
 
     steps:
 
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
       # Checkout
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
 
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -40,38 +42,251 @@ jobs:
           fetch-depth: 0
 
 
-      # ==========================================================
-      # SCAN 1 - TRIVY
-      # ==========================================================
+      # ========================================================
+      # CREATE LOCAL TOOL DIRECTORY
+      # ========================================================
+
+      - name: Create Security Tools Directory
+        shell: powershell
+        run: |
+          $tools = "$env:RUNNER_TEMP\security-tools"
+
+          if (Test-Path $tools) {
+              Remove-Item $tools -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Path $tools -Force
+
+          Write-Host "Security tools directory:"
+          Write-Host $tools
+
+
+      # ========================================================
+      # INSTALL TRIVY
+      # ========================================================
+
+      - name: Download Trivy
+        shell: powershell
+        run: |
+
+          $tools = "$env:RUNNER_TEMP\security-tools"
+          $trivyDir = "$tools\trivy"
+
+          New-Item -ItemType Directory -Path $trivyDir -Force
+
+          Write-Host "Downloading Trivy..."
+
+          $release = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/aquasecurity/trivy/releases/latest" `
+            -Headers @{ "User-Agent" = "GitHubActions" }
+
+          $asset = $release.assets |
+            Where-Object {
+              $_.name -match "windows-64bit.zip$"
+            } |
+            Select-Object -First 1
+
+          if (-not $asset) {
+              throw "Trivy Windows 64-bit ZIP not found."
+          }
+
+          Write-Host "Trivy asset:"
+          Write-Host $asset.name
+
+          $zip = "$tools\trivy.zip"
+
+          Invoke-WebRequest `
+            -Uri $asset.browser_download_url `
+            -OutFile $zip
+
+          Expand-Archive `
+            -Path $zip `
+            -DestinationPath $trivyDir `
+            -Force
+
+          $trivyExe = Get-ChildItem `
+            -Path $trivyDir `
+            -Filter "trivy.exe" `
+            -Recurse |
+            Select-Object -First 1
+
+          if (-not $trivyExe) {
+              throw "trivy.exe not found after extraction."
+          }
+
+          Write-Host "Trivy installed at:"
+          Write-Host $trivyExe.FullName
+
+          # Add only for this workflow
+          Add-Content `
+            -Path $env:GITHUB_PATH `
+            -Value $trivyExe.DirectoryName
+
+
+      # ========================================================
+      # INSTALL CHECKOV
+      # ========================================================
+
+      - name: Install Checkov
+        shell: powershell
+        run: |
+
+          $checkovDir = "$env:RUNNER_TEMP\checkov"
+
+          if (Test-Path $checkovDir) {
+              Remove-Item $checkovDir -Recurse -Force
+          }
+
+          New-Item -ItemType Directory -Path $checkovDir -Force
+
+          Write-Host "Installing Checkov..."
+
+          python -m pip install `
+            --upgrade `
+            --target $checkovDir `
+            checkov
+
+          # Add Python package directory
+          Add-Content `
+            -Path $env:GITHUB_PATH `
+            -Value $checkovDir
+
+          Write-Host "Checkov installation completed."
+
+
+      # ========================================================
+      # INSTALL GITLEAKS
+      # ========================================================
+
+      - name: Download Gitleaks
+        shell: powershell
+        run: |
+
+          $tools = "$env:RUNNER_TEMP\security-tools"
+          $gitleaksDir = "$tools\gitleaks"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $gitleaksDir `
+            -Force
+
+          Write-Host "Downloading Gitleaks..."
+
+          $release = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/gitleaks/gitleaks/releases/latest" `
+            -Headers @{ "User-Agent" = "GitHubActions" }
+
+          $asset = $release.assets |
+            Where-Object {
+              $_.name -match "windows_x64.zip$"
+            } |
+            Select-Object -First 1
+
+          if (-not $asset) {
+              throw "Gitleaks Windows x64 ZIP not found."
+          }
+
+          Write-Host "Gitleaks asset:"
+          Write-Host $asset.name
+
+          $zip = "$tools\gitleaks.zip"
+
+          Invoke-WebRequest `
+            -Uri $asset.browser_download_url `
+            -OutFile $zip
+
+          Expand-Archive `
+            -Path $zip `
+            -DestinationPath $gitleaksDir `
+            -Force
+
+          $gitleaksExe = Get-ChildItem `
+            -Path $gitleaksDir `
+            -Filter "gitleaks.exe" `
+            -Recurse |
+            Select-Object -First 1
+
+          if (-not $gitleaksExe) {
+              throw "gitleaks.exe not found after extraction."
+          }
+
+          Write-Host "Gitleaks installed at:"
+          Write-Host $gitleaksExe.FullName
+
+          Add-Content `
+            -Path $env:GITHUB_PATH `
+            -Value $gitleaksExe.DirectoryName
+
+
+      # ========================================================
+      # VERIFY TOOLS
+      # ========================================================
+
+      - name: Verify Security Tools
+        shell: powershell
+        run: |
+
+          Write-Host "=============================="
+          Write-Host "Security Tool Versions"
+          Write-Host "=============================="
+
+          trivy --version
+
+          python -m checkov --version
+
+          gitleaks version
+
+
+      # ========================================================
+      # TRIVY SCAN
+      # ========================================================
 
       - name: Trivy IaC Scan
-        uses: aquasecurity/trivy-action@0.36.0
-        with:
-          scan-type: config
-          scan-ref: .
-          scanners: misconfig,secret
-          severity: HIGH,CRITICAL
-          exit-code: 1
+        shell: powershell
+        run: |
+
+          Write-Host "=============================="
+          Write-Host "TRIVY IaC SCAN"
+          Write-Host "=============================="
+
+          trivy config . `
+            --severity HIGH,CRITICAL `
+            --exit-code 1
 
 
-      # ==========================================================
-      # SCAN 2 - CHECKOV
-      # ==========================================================
+      # ========================================================
+      # CHECKOV SCAN
+      # ========================================================
 
       - name: Checkov Terraform Scan
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          directory: .
-          framework: terraform
-          soft_fail: false
+        shell: powershell
+        run: |
+
+          Write-Host "=============================="
+          Write-Host "CHECKOV TERRAFORM SCAN"
+          Write-Host "=============================="
+
+          python -m checkov `
+            -d . `
+            --framework terraform `
+            --compact
 
 
-      # ==========================================================
-      # SCAN 3 - GITLEAKS
-      # ==========================================================
+      # ========================================================
+      # GITLEAKS SCAN
+      # ========================================================
 
       - name: Gitleaks Secret Scan
-        uses: gitleaks/gitleaks-action@v3
+        shell: powershell
+        run: |
+
+          Write-Host "=============================="
+          Write-Host "GITLEAKS SECRET SCAN"
+          Write-Host "=============================="
+
+          gitleaks dir . `
+            --redact `
+            --exit-code 1
 
 
   # ============================================================
@@ -86,31 +301,23 @@ jobs:
       - security-scan
 
     if: >
-      needs.security-scan.result == 'success' &&
-      (
-        github.event_name == 'pull_request' ||
-        (
-          github.event_name == 'push' &&
-          github.ref == 'refs/heads/main'
-        )
-      )
+      needs.security-scan.result == 'success'
 
     runs-on: self-hosted
 
     steps:
 
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
       # Checkout
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
 
       - name: Checkout Code
         uses: actions/checkout@v4
 
 
-      # ==========================================================
-      # AZURE OIDC LOGIN
-      # Same credentials for PR and Main
-      # ==========================================================
+      # ========================================================
+      # AZURE OIDC
+      # ========================================================
 
       - name: Azure Login - OIDC
         uses: azure/login@v2
@@ -120,65 +327,64 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
 
-      # ----------------------------------------------------------
-      # Verify Azure Login
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
+      # Verify Azure
+      # --------------------------------------------------------
 
       - name: Verify Azure Login
-        run: az account show
+        shell: powershell
+        run: |
+          az account show
 
 
-      # ----------------------------------------------------------
-      # Setup Terraform
-      # ----------------------------------------------------------
+      # ========================================================
+      # TERRAFORM
+      # ========================================================
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
 
 
-      # ----------------------------------------------------------
-      # Terraform Format
-      # ----------------------------------------------------------
-
       - name: Terraform Format Check
-        run: terraform fmt -check -recursive
+        shell: powershell
+        run: |
+          terraform fmt -check -recursive
 
-
-      # ----------------------------------------------------------
-      # Terraform Init
-      # ----------------------------------------------------------
 
       - name: Terraform Init
         working-directory: environments/dev
-        run: terraform init -input=false
+        shell: powershell
+        run: |
+          terraform init -input=false
 
-
-      # ----------------------------------------------------------
-      # Terraform Validate
-      # ----------------------------------------------------------
 
       - name: Terraform Validate
         working-directory: environments/dev
-        run: terraform validate
+        shell: powershell
+        run: |
+          terraform validate
 
-
-      # ----------------------------------------------------------
-      # Terraform Plan
-      # ----------------------------------------------------------
 
       - name: Terraform Plan
         working-directory: environments/dev
-        run: terraform plan -input=false -out=tfplan
+        shell: powershell
+        run: |
+          terraform plan `
+            -input=false `
+            -out=tfplan
 
 
-      # ----------------------------------------------------------
-      # Upload Plan for Main Apply
-      # Only Main push
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
+      # Upload Plan
+      # --------------------------------------------------------
 
       - name: Upload Terraform Plan
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main'
+
         uses: actions/upload-artifact@v4
+
         with:
           name: terraform-plan
           path: environments/dev/tfplan
@@ -203,28 +409,22 @@ jobs:
 
     runs-on: self-hosted
 
-    # ----------------------------------------------------------
-    # IMPORTANT:
-    # GitHub Environment must have Required Reviewers enabled
-    # ----------------------------------------------------------
-
     environment:
       name: production
 
     steps:
 
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
       # Checkout
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
 
       - name: Checkout Code
         uses: actions/checkout@v4
 
 
-      # ----------------------------------------------------------
-      # Azure OIDC Login
-      # Same credentials
-      # ----------------------------------------------------------
+      # ========================================================
+      # AZURE OIDC
+      # ========================================================
 
       - name: Azure Login - OIDC
         uses: azure/login@v2
@@ -234,34 +434,34 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
 
-      # ----------------------------------------------------------
-      # Verify Azure Login
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
+      # Verify Azure
+      # --------------------------------------------------------
 
       - name: Verify Azure Login
-        run: az account show
+        shell: powershell
+        run: |
+          az account show
 
 
-      # ----------------------------------------------------------
-      # Setup Terraform
-      # ----------------------------------------------------------
+      # ========================================================
+      # TERRAFORM
+      # ========================================================
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
 
 
-      # ----------------------------------------------------------
-      # Terraform Init
-      # ----------------------------------------------------------
-
       - name: Terraform Init
         working-directory: environments/dev
-        run: terraform init -input=false
+        shell: powershell
+        run: |
+          terraform init -input=false
 
 
-      # ----------------------------------------------------------
-      # Download Terraform Plan
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
+      # Download Plan
+      # --------------------------------------------------------
 
       - name: Download Terraform Plan
         uses: actions/download-artifact@v4
@@ -270,10 +470,15 @@ jobs:
           path: environments/dev
 
 
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
       # Terraform Apply
-      # ----------------------------------------------------------
+      # --------------------------------------------------------
 
       - name: Terraform Apply
         working-directory: environments/dev
-        run: terraform apply -input=false -auto-approve tfplan
+        shell: powershell
+        run: |
+          terraform apply `
+            -input=false `
+            -auto-approve `
+            tfplan
