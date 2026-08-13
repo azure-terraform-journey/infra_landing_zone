@@ -1,0 +1,97 @@
+# Azure DevOps CI/CD Pipeline for Terraform Infrastructure Landing Zone
+# Target Agent: Self-Hosted Windows Agent (DESKTOP-S73UA0F) in Default pool
+
+trigger:
+  branches:
+    include:
+      - main
+      - feature*
+
+pool:
+  name: Default
+  demands:
+    - Agent.Name -equals DESKTOP-S73UA0F
+
+variables:
+  WORKING_DIR: '$(System.DefaultWorkingDirectory)/environments/dev'
+  AZURE_SERVICE_CONNECTION: 'Azure-CloudOps-Connection'
+
+stages:
+  - stage: Terraform_CI
+    displayName: 'Terraform Validation, Security & Plan'
+    jobs:
+      - job: Validate_And_Plan
+        displayName: 'Terraform Validation & Plan Job'
+        steps:
+          - checkout: self
+            displayName: '1. Checkout Repository'
+            clean: true
+
+          - task: PowerShell@2
+            displayName: '2. Verify Installed Tooling'
+            inputs:
+              targetType: 'inline'
+              script: |
+                Write-Host "=== Checking Installed Tools ==="
+                Write-Host "Terraform version:"
+                terraform --version
+                Write-Host "Checkov version:"
+                checkov --version
+
+          - task: PowerShell@2
+            displayName: '3. Terraform Format Check'
+            inputs:
+              targetType: 'inline'
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              script: |
+                Write-Host "=== Checking Terraform Formatting ==="
+                terraform fmt -recursive -check
+
+          - task: AzureCLI@2
+            displayName: '4. Terraform Init'
+            inputs:
+              azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+              scriptType: 'ps'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(variables.WORKING_DIR)'
+              inlineScript: |
+                Write-Host "=== Initializing Terraform ==="
+                terraform init
+
+          - task: AzureCLI@2
+            displayName: '5. Terraform Validate'
+            inputs:
+              azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+              scriptType: 'ps'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(variables.WORKING_DIR)'
+              inlineScript: |
+                Write-Host "=== Validating Terraform Configuration ==="
+                terraform validate
+
+          - task: PowerShell@2
+            displayName: '6. Checkov Security Scan'
+            inputs:
+              targetType: 'inline'
+              workingDirectory: '$(variables.WORKING_DIR)'
+              script: |
+                Write-Host "=== Running Checkov IaC Security Scan ==="
+                checkov --framework terraform --soft-fail
+
+          - task: AzureCLI@2
+            displayName: '7. Terraform Plan'
+            inputs:
+              azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+              scriptType: 'ps'
+              scriptLocation: 'inlineScript'
+              workingDirectory: '$(variables.WORKING_DIR)'
+              inlineScript: |
+                Write-Host "=== Generating Terraform Plan ==="
+                terraform plan -out=tfplan
+
+          - task: PublishPipelineArtifact@1
+            displayName: '8. Publish Terraform Plan Artifact'
+            inputs:
+              targetPath: '$(variables.WORKING_DIR)/tfplan'
+              artifact: 'terraform-plan-dev'
+              publishLocation: 'pipeline'
